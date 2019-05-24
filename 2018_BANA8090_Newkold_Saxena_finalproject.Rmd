@@ -1,0 +1,482 @@
+---
+title: Factors Impacting Spending Behavior of Different Generations
+author: by <span style="color:red">Ashwita Saxena</span>
+output: 
+  html_document:
+    code_folding: hide
+---
+## {.tabset .tabset-fade}
+
+### Introduction {.tabset .tabset-fade .tabset-pills}
+
+There has been much talk about how Millenials are quite different than previous generations. They have grown up in front of smart phones, have student loans amounting to more than is polite to discuss. Most importantly, avacado toast and endless mimosas are common place. 
+
+Given that they are very different than their predecesors, we thought studying certain aspects of their lives and the resulting spending behavior on groceries would be an area to gain insight into. Resulting in better marketing strategies aimed specifically at the millenials and a potential increase in sales.
+
+To accomplish this we will be using the household.csv and transaction.csv data out of the [Complete Journey Customer Transactions (without marketing campaigns)](https://www.dropbox.com/sh/xzat5mcqy9dt791/AAC8w9Ep0IWpaNze0XHY258Xa?dl=1). The variables we are interested in at the beginning of our analysis, and therefore choose to keep are:
+
+* HSHD_NUM - Household number
+* SPEND - Amount in dollar spent on one unit of product/commodity
+* UNTS - number of products/commodity bought per transaction
+* L - Whether a household has a loyalty program
+* AGE_RANGE - Age groups
+* MARITAL - Single/Married
+* INCOME_RANGE - Income groups for income of the household
+* HOMEOWNER - Whether the household owns/rents a house
+* HH_SIZE - Number of people in a household
+
+###Packages Required
+
+For reproducibility you will need set your working directory and download the following packages:
+
+* ggplot2 - for making nice graphs
+* tibble - for making simple data frames 
+* data.table - for downloading data quickly
+* dplyr - data cleaning and preperation (summarizing, joining etc.)
+* knitr - to output a nice looking table
+* kableExtra - to make tables more pretty and interactive
+* Hmisc - to see details of data
+* fastDummies - for creating dummy variables
+
+```{r packages, message = FALSE}
+
+# # Install Packages --------------------------------------------------------
+# pkgs <- c(
+#   "dplyr",      
+#   "ggplot2",    
+#   "data.table", 
+#   "knitr", 
+#   "kableExtra",
+#   "tibble",   
+#   "Hmisc", 
+#   "fastDummies" 
+# )
+# 
+# # Install required packages
+# for (pkg in pkgs) {
+#   if (!(pkg %in% installed.packages()[, "Package"])) {
+#     install.packages(pkg)
+#   }
+# }
+
+# Packages Required -------------------------------------------------------
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(knitr)
+library(tibble)
+library(kableExtra)
+library(fastDummies)
+library(Hmisc)
+
+```
+
+###Data Preparation
+Our original data was imported from the [Complete Journey Customer Transactions (without marketing campaigns)](https://www.dropbox.com/sh/xzat5mcqy9dt791/AAC8w9Ep0IWpaNze0XHY258Xa?dl=1). The original household data had 5000 observations and 9 variables while the original transaction data had  10,625,553 observations and 9 variables. There were a few issues with the data including missing values being recorded as "NULL" instead of NA. In addition to a lot of missing values in many of the variables. 
+
+```{r clean, message = FALSE, warning = FALSE}
+# Importing Data ----------------------------------------------------------
+files <- c("5000_transactions", "5000_households", "5000_products")
+
+for(i in seq_along(files)) {
+  # path to file name
+  full_path <- paste0("data/",files[i], ".csv")
+  
+  # import if the file exists
+  if(file.exists(full_path)) {
+    df <- data.table::fread(full_path, data.table = FALSE)
+    assign(substring(files[i],6,nchar(files[i])), df)
+  } else {
+    print("No such file exists")
+  }
+}
+```
+We first took a 'glimpse' at each table and choose the variables we wanted from each table. We then converted them to tibbles for easy manipulation by using the dplyr package.  From the household table the variables we choose to keep were: Household Number, Loyalty, Age Range, Marital Status, Income Range, Homeowner, Household Size. From the transaction table the variables we kept were: Basket Number, Household Number, Product Number, Spending, and Units. 
+```{r, glimpse, results='hide'}
+# Quick Look at Data ------------------------------------------------------
+str (households)
+glimpse (households)
+glimpse (transactions)
+glimpse (products)
+
+
+# Convert to Tibbles ------------------------------------------------------
+trans_tbl <- tbl_df(transactions)
+hhld_tbl <- tbl_df(households)
+
+# Choosing Variables, Cleaning, Refining ------------------------------------------------------
+names(trans_tbl)
+trans_trim <- select(trans_tbl, BASKET_NUM, HSHD_NUM, PRODUCT_NUM, SPEND, UNITS)
+
+names(hhld_tbl)
+hhld_trim <- select(hhld_tbl, HSHD_NUM, L, AGE_RANGE, MARITAL, INCOME_RANGE,
+                     HOMEOWNER,HH_SIZE)
+```
+
+We then needed to change the "NULL"s in the data set to NA in order for us to aggregate them appropriately for further analysis. There are no missing values in the transaction data.
+
+```{r, changeNA, results = 'hide'}
+# Identify Missing Values ----------------------------------------------
+trans_trim$UNITS[trans_trim$UNITS == "null"] <- NA
+sum(is.na(trans_trim$UNITS))
+#[1] 0
+trans_trim$SPEND[trans_trim$SPEND == "null"] <- NA
+sum(is.na(trans_trim$SPEND))
+#[1] 0
+
+hhld_trim[hhld_trim == "null"] <- NA
+```
+
+We wanted to take a quick look at the new data set before we continue to change it. That is shown below:
+```{r, show}
+hhld_trim
+```
+
+We then made a new column named 'Spending' that was created by $Spending = units * spend$. This tells us how much the transactions cost as a whole, instead of unit by unit. We then grouped the households together, and added up all spending in each household which is 'TOTAL_SPEND' which tells us how much each household spent overall, not just in each transaction. 
+
+```{r, new_var, results='hide'}
+# Create New Variables----------------------------------------------------
+trans_mutate <- mutate(trans_trim, SPENDING = UNITS*SPEND)
+trans_final <- trans_mutate %>%
+  group_by(HSHD_NUM)%>%
+  summarise(
+    TOTAL_SPEND = sum(SPENDING, na.rm = T)
+    )
+
+trans_final
+```
+
+We then converted 'Household Number' to an int to eliminate the extra unnecessary leading zeros. We then left joined the primary table, household, to the transaction table to create a clean dataset (hhld_final).
+
+```{r, join, results='hide'}
+# Joining Tables to Create New Dataset ------------------------------------
+hhld_trim$HSHD_NUM <- as.integer(hhld_trim$HSHD_NUM)
+trans_final$HSHD_NUM <- as.integer(trans_final$HSHD_NUM)
+hhld_final <- left_join(hhld_trim, trans_final,by = "HSHD_NUM")
+```
+
+This new dataset has 5000 observations and 8 variable, we wanted to do another exploration of the data using str() and summary(). We also looked at the number of missing observations in each in variable. We are not removing the NAs from our data set as to prevent bias. Instead we choose to report them only, shown below. 
+
+```{r, new_sum, results='hide'}
+# Data Exploration ----------------------------------------------------------
+str(hhld_final)
+summary(hhld_final)
+
+### looking for missing values:
+see <- as.data.frame(hhld_final)
+describe(see)
+```
+* **HH_SIZE** - 933
+* **MARITAL** - 896
+* **AGE_RANGE** - 865
+* **INCOME_RANGE** - 865
+* **HOMEOWNER** - 865
+* **LOYALTY** - 0
+
+Lastly, we looked how the variable 'TOTAL_SPEND' was distributed to look for outliers in a histogram, QQplot, and a Box Plot. The distribution of 'TOTAL_SPEND' is highly skewed to the right, and there clearly are outliers in the high end of dollars spent.
+```{r more_clean}
+hist(hhld_final$TOTAL_SPEND, main = "Histogram of Total Spend", xlab = "Total Spend", ylab = "Number of Households")
+qqnorm(hhld_final$TOTAL_SPEND)
+qqline(hhld_final$TOTAL_SPEND)
+boxplot(hhld_final$TOTAL_SPEND)
+```
+
+Based on the outliers shown in the previous plots we decided to eliminate the top 4th percentile, getting rid of any household that spent over $35,000. A box plot, below, shows our outliers have been removed. Then a histogram to show the final distribution of the variable TOTAL_SPEND. 
+```{r, quantile, results = 'hide'}
+quantile(hhld_final$TOTAL_SPEND, prob = 0.96, na.rm = TRUE)
+```
+
+```{r final_table, results = 'hide'}
+hhld_treated <- filter(hhld_final, TOTAL_SPEND < 35000)
+hhld_treated
+```
+```{r final_boxplot}
+boxplot(hhld_treated$TOTAL_SPEND)
+```
+
+
+|  | Total Dolars Spent | 
+|------:|:-----|
+| MIN | 0.69 |
+| 1st Quarter | 2,145.35 |
+| Median | 9,561.40 |
+| Mean | 10,290.80 |
+| 3rd Quarter | 15,589.72 |
+| MAX | 34,804.25 |
+
+
+
+
+```{r histogram}
+hist(hhld_treated$TOTAL_SPEND, main = "Histogram of Total Spend", xlab = "Total Spend", ylab = "Number of Households")
+```
+
+We then removed the observations where age is not known or available. 
+```{r removing_age_not_know}
+# Removing Observations with No AGE ---------------------------------------
+hhls_age <- filter(hhld_treated, AGE_RANGE != 0)
+hhld_age <- filter(hhld_treated, AGE_RANGE != "NOT AVAILABLE")
+```
+
+To define the generations we are interested in we combined customers into groups. Our definition of each generation are defined as millenials between 19-34 years old. Generation X is ages 34-54, and baby boomers as ages 55 and above.
+
+```{r grouping_by_age}
+# Binning Ages into Generations -------------------------------------------
+millennials <- c('19-24', '25-34')
+gen_x <- c('35-44','45-54')
+bboomers <- c('55-64','65-74','75+')
+
+hhld_age$GENERATION <- ifelse(hhld_age$AGE_RANGE %in% millennials, 'Millennials' , 
+ifelse(hhld_age$AGE_RANGE %in% gen_x, 'Generation X' ,ifelse(hhld_age$AGE_RANGE 
+%in% bboomers, 'Baby Boomers',0)))
+
+levels(hhld_age$GENERATION) <- list('millennials' = millennials,
+                             'gen_x' = gen_x,
+                             'bboomers' = bboomers)
+
+```
+
+The final structure of our data set is 3854 observations by 9 variables with the 'HSHD_NUM' as an integer, 'TOTAL_SPEND' as a number, INCOME_RANGE and GENERATION as a factor, and all of remaining variables as a character.
+
+
+```{r table_of_data}
+kable(hhld_age[1:10, ], caption = "First 10 Rows of Final Data Set") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", full_width = FALSE))
+```
+
+
+```{r, final_sum, results='hide'}
+str(hhld_age)
+summary(hhld_age)
+```
+
+
+
+
+###Exploratory Data Analysis {.tabset .tabset-fade .tabset-pills}
+
+####Overall Spending
+
+Our main question is whether millennials spend more money on groceries than other
+generations. To evaluate we made a bar plot to visually see each generation individually against the total amount they spent in one year. With a box plot added in we can more easily see the mean and percentiles to compare.
+
+
+```{r order_groups}
+# Exploratory Data Analysis - Visualizations -----------------------------------------------------------------
+
+#Total Spend by Age groups 
+hhld_age$INCOME_RANGE <- factor(hhld_age$INCOME_RANGE, levels = 
+  c("Under 35K", "35-49K", "50-74K", "75-99K", "100-150K", "150K+"))
+hhld_age$GENERATION <- factor(hhld_age$GENERATION, levels = 
+  c("Millennials", "Generation X", "Baby Boomers"))
+
+ggplot(data = hhld_age, aes(x = GENERATION, y = TOTAL_SPEND, color = GENERATION)) +
+  geom_boxplot() +
+  geom_jitter(width = .36, alpha = .5) + 
+  theme(legend.position = "none") +
+  labs(x = " ", y = 'Total Dollars Spent')
+
+```
+
+A visual comparison is not sufficient however, so we performed an ANOVA test on the three generations comparing money spent. With the p-value much smaller than 0.05 we conclude that the there is a significant difference in spending between the three generations.
+
+```{r anova_generations}
+##analysis of variance of age groups
+res.aov <- aov(hhld_age$TOTAL_SPEND ~ hhld_age$GENERATION)
+summary (res.aov)
+# P value very very small, highly significant. 
+#Hence conclude there is significant difference in spending of the 3 age groups.
+```
+
+#### Income Level
+
+Next, we wanted to see if there were any obvious differences in the income level of the different generations. Here are two different ways to visualize the same thing, most people are better at reading bar graphs so including it is useful.
+
+```{r income_blocks}
+#Income by age group
+ggplot(data = hhld_age, aes(x = INCOME_RANGE, y = GENERATION, color = GENERATION)) +
+  geom_jitter(width = .25, alpha = .5) +
+  theme(legend.position = "none") +
+  labs(x = "Income Range of Shopper", y = ' ')
+```
+
+```{r income_bar}
+ggplot(hhld_age, aes(x = INCOME_RANGE, fill = GENERATION)) +
+  geom_bar(position = 'dodge')
+```
+
+Here we combined income range with total money spent, and made the generations different colors. That way you can see how all three variables relate to the others. You can see that there are more people in the income ranges 35-45K and 50-74K that spend on average around $10,000. We also included boxplots so the averages are easier to visualize amongst the thousands of dots. 
+
+```{r income_jitter}
+#income range for age groups 
+ggplot(data = hhld_age, aes(x = INCOME_RANGE, y = TOTAL_SPEND, color = GENERATION)) +
+  geom_jitter(width = .43, alpha = .5) + 
+  labs(x = "Income Range of Shopper", y = 'Total Dollars Spent')
+  
+#income range and spending and age groups with BOXPLOTS
+ggplot(data = hhld_age, aes(x = INCOME_RANGE, y = TOTAL_SPEND, color = GENERATION)) +
+  geom_jitter(width = .43, alpha = .5) + 
+  geom_boxplot() +
+  labs(x = "Income Range of Shopper", y = 'Total Dollars Spent')
+```
+
+We also wanted to see if there was a difference in total dollars spent between income groups and there is a clear decrease in spending in people making more that 150 thousand dollars a year. There could be many reasons for this, but perhaps people who make this much money shop somewhere else. 
+
+```{r}
+# scatter plot 
+ggplot(data = hhld_age, aes(y = TOTAL_SPEND, x = INCOME_RANGE)) +
+  geom_boxplot() +
+  labs(x = '', y = 'Total Dollars Spent')
+```
+
+#### Marital Status
+
+Next, we looked at marital status to see if there were any differences in total spending amount. The first thing that was obvious to us, is that there are more single millennials than married. This is made even more evident when looking at the bar graph below. 
+
+```{r marital_scatter}
+# scatter plot 
+ggplot(data = hhld_age, aes(color = GENERATION, y = TOTAL_SPEND, x = MARITAL)) +
+  geom_point() + 
+  geom_jitter(width = .48, alpha = .5)
+
+```
+
+```{r marital_bar}
+#Marital Status freq chart in three generations 
+ggplot(hhld_age, aes(x = MARITAL, group = GENERATION, fill = GENERATION)) +
+  geom_bar(position = 'dodge') + 
+  labs(x = " ", y = 'Frequency') + 
+  guides(fill=guide_legend(title="Loyalty Program"))
+```
+
+This boxplot allows us easily to see the differences in maried vs single people in how much money they spent at the grocery. Interestingly it looks like single millenials spend more than their married counterparts. Where single generation X spend less than their married counterparts. It would be interesting to know how many of these people have childrens and if that is impacting spending amounts. 
+
+```{r}
+# scatter plot 
+ggplot(data = hhld_age, aes(color = MARITAL, y = TOTAL_SPEND, x = GENERATION)) +
+  geom_boxplot() +
+  labs(x = '', y = 'Total Dollars Spent')
+```
+
+
+#### Loyalty Program
+
+We also wanted to look and see if being a loyalty card member impacted spending amounts. It looks like overall spending goes up dramatically in all generations when they are loyal members. 
+
+```{r loyalty}
+ggplot(data = hhld_age, aes(x = GENERATION, y = TOTAL_SPEND, color = L)) +
+  geom_boxplot() +
+  geom_point() +
+  geom_jitter(width = .25, alpha = .5) +
+  labs(x = '', y = 'Total Dollars Spent')
+
+```
+
+This could perhaps be explained by people who do not normally shop at this grocery store and maybe live out of town. They could be pulling the average spending amount lower. 
+
+```{r}
+# scatter plot 
+ggplot(data = hhld_age, aes(y = TOTAL_SPEND, x = L, color = L)) +
+  geom_boxplot() +
+  labs(x = '', y = 'Total Dollars Spent') + 
+  guides(fill=guide_legend(title="Loyalty"))
+```
+
+#### Homeowner 
+
+Finally, observing the patterns in homeownership and dollars spent. We decided to look at this data in a violin chart. Because of this chart type, you can see that in renters there is a small bump in dollars spent in the $20,000 range. To further look at why this is happening I broke the homeownership groups down further into the three generations. This violin chart can be seen below.  
+
+```{r home_violin}
+#Marital Status freq chart in three generations 
+ggplot(hhld_age, aes(x = HOMEOWNER, y = TOTAL_SPEND, scale = "area")) +
+  geom_violin(position = 'dodge') + 
+  guides(fill=guide_legend(title="Loyalty Program")) +
+  labs(x = '', y = 'Total Dollars Spent')
+```
+
+With the generational breakdown you can see that this increase in spending in renters occurs in Generation X. Why they spend more would be a good question to follow up on. 
+
+```{r home_violin_in_three}
+#Marital Status freq chart in three generations 
+ggplot(hhld_age, aes(x = HOMEOWNER, y = TOTAL_SPEND, scale = "area", color = GENERATION)) +
+  geom_violin(position = 'dodge') + 
+  guides(fill=guide_legend(title="Loyalty Program")) +
+  labs(x = '', y = 'Total Dollars Spent')
+```
+
+
+### Summary
+
+**Problem Statement**
+
+Because millenials have been described radically different than provious generations our main question was if millennials spend more money at the grocery store. Furthermore, we thought other factors such as homeownership or being married could correlate to the total amount of money being spent as well.
+
+**Methodology**
+
+To address this main question we cleaned our data down to a few variables that we deemed important to answering this main question. We eliminated extreme outliers, and then combined the different age groups into commonly defined generations, the millennials (ages 19-34), generation X (ages 34-54), and baby boomers (ages 55+). 
+Finally, we started making graphs to visualize how these different factors impacted total spending in the three different generations. We made many different types of graphs to look at the data in different ways. 
+
+**Insights**
+
+There are many insights you could take away from our analysis but the major ones are: 
+
+* While there is a significant difference between the spending between the three generations, millennials do not spend more money overall at the grocery compared to generation X or baby boombers. 
+* There are many more Genration X and Baby Boomers shoping at this grocery store than the millennials. 
+* 35,000 to 74,000 is the most reported income braket that shops here within all three generations. *Besides incomes not reported, which is the largest proportion in the baby boomers*
+* There doesnt appear to be much difference between amount spent within income brakets for the different genrations. However, the millenials who make more than $150,000 spend much more than their generational counterparts. 
+* Marital status does not appear to impact how much is spent.
+* One of the most significant indicators to how much is spent total apears to be whether or not the customer is in the loyalty program or not. The loyaly customers spent significantly more than customers who are not in the loyalty program.
+* Homeownership is the last factor we looked at. Not much appears to stand out except that renters, as apposed to home owners, who are in generation X appear to have a small population that spends around $20,000 which is double the average. 
+
+* We also made a few simple models to see if any particular generation statistically impacted the spending amount overall. We created dummy variables for the generations to be able to incorporate them into our linear model. 
+
+Model 1: Millennials 
+
+```{r dummy_models}
+#creating dummy variables for regression ->
+hhld_dummy <- hhld_age %>% 
+  dummy_cols(select_columns = "L") %>% 
+  dummy_cols(select_columns = "GENERATION")
+
+
+model1 <- lm(hhld_dummy$TOTAL_SPEND ~ hhld_dummy$GENERATION_Millennials)
+summary(model1)
+```
+
+Model 2: Generation X
+
+```{r dummy_models2}
+
+model2 <- lm(hhld_dummy$TOTAL_SPEND ~ hhld_dummy$`GENERATION_Generation X`)
+summary(model2)
+```
+
+Model 3: Baby Boomers
+
+```{r dummy_models3}
+model3 <- lm(hhld_dummy$TOTAL_SPEND ~ hhld_dummy$`GENERATION_Baby Boomers`)
+summary(model3)
+```
+
+You can see that the only model that shows significance is generation X and baby boomers. With Generation X spending $1,185.70 more, and the baby boomers spending $1,095 less than the others. 
+
+However we observe a very small adjusted R squared value in both model 2 and 3, therefore much more study needs to be done to further indentify what is impacting the spending differences. 
+
+
+**Implications To Consumer**
+
+This analysis shows that there are many facets that make up an individual and trying to understand which of those are impacting how much a customer spends is complicated. However, we have shown a few specific factors that could be emphasised in marketing campaigns to further understand who is spending the most money and how to attract similar customers to the store. 
+
+The main factors we would emphasis are:
+
+* Loyalty customers. They spend much more than their counterparts. Focusing on them would lead to more revenue. 
+* Customers in generation X that do not own a home spend a drasitically higher amount. Focusing on them and bringing in new customers in those same demographics could lead to an overall increase in revenue. 
+
+**Limitions of Study**
+
+The limitations we had with the study are: 
+
+* Few of our observations are backed by statistical analysis. Showing those number versus just visual observations would carry more gravitas. 
+* Having more variables to look at would be interesting. Such as, how many children does this customer have, or do they take care of elderly parents in their home. Even the ages of people in the household could be interesting. 
+* I think if we normalized the data we may have been able to see more dramitic patterns. Clearly less millennials shop at this store than generation x or baby boomers. I think that impacted how much that group spent on average overall. I was just unsure how to normalize the data, and what to normalize the millennial group to. 
+* Lastly, it would be amazing to get data on millennials from other grocery chains to look at what factors are impacting their spending behaviors there. Whether or not they are spending more elsewhere and why could lead to a greater understanding of how to get them to our grocery store to increase revenue. 
